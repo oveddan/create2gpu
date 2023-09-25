@@ -1,22 +1,43 @@
-# create2crunch
+# create2gpu
 
-> A Rust program for finding salts that create gas-efficient Ethereum addresses via CREATE2.
+Leverages GPU acceleration to mine a salt for a deterministic contract address matching certain criteria using CREATE2.
 
-Provide three arguments: a factory address (or contract that will call CREATE2), a caller address (for factory addresses that require it as a protection against frontrunning), and the keccak-256 hash of the initialization code of the contract that the factory will deploy. (The example below references [`Create2Factory` on Ropsten](https://ropsten.etherscan.io/address/0xa779284f095ef2eBb8ee26cd8384e49C57b26996).)
+Fork of [create2crunch](https://github.com/0age/create2crunch).
+
+For CPU based generation, see [use create2](https://book.getfoundry.sh/reference/cast/cast-create2)
+
+## Usage
+
+[Install rust and cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+
+Clone the repository:
 
 ```sh
-$ git clone https://github.com/0age/create2crunch
-$ cd create2crunch
-$ export FACTORY="0xa779284f095ef2eBb8ee26cd8384e49C57b26996"
-$ export CALLER="<YOUR_ROPSTEN_ADDRESS_OF_CHOICE_GOES_HERE>"
-$ export INIT_CODE_HASH="<HASH_OF_YOUR_CONTRACT_INIT_CODE_GOES_HERE>"
-$ cargo run --release $FACTORY $CALLER $INIT_CODE_HASH
+$ git clone https://github.com/oveddan/create2gpu
 ```
 
-For each efficient address found, the salt, resultant addresses, and value *(i.e. approximate rarity)* will be written to `efficient_addresses.txt`. Verify that one of the salts actually results in the intended address before getting in too deep - ideally, the CREATE2 factory will have a view method for checking what address you'll get for submitting a particular salt. Be sure not to change the factory address or the init code without first removing any existing data to prevent the two salt types from becoming commingled. There's also a *very* simple monitoring tool available if you run `$python3 analysis.py` in another tab.
+Generate a contract address with leading "dead" prefix:
 
-This tool was originally built for use with [`Pr000xy`](https://github.com/0age/Pr000xy), including with [`Create2Factory`](https://github.com/0age/Pr000xy/blob/master/contracts/Create2Factory.sol) directly.
+```sh
+$ cargo run --release -- --starts-with dead --deployer 0x0000000000FFe8B47B3e2130213B802212439497 --caller 0x0000000000000000000000000000000000000000 --init-code-hash 0c591f26891d6443cf08c5be3584c1e6ae10a4c2f07c5c53218741e9755fb9cd
+```
 
-There is also an experimental OpenCL feature that can be used to search for addresses using a GPU. To give it a try, include a fourth parameter specifying the device ID to use, and optionally a fifth and sixth parameter to filter returned results by a threshold based on leading zero bytes and total zero bytes, respectively. By way of example, to perform the same search as above, but using OpenCL device 2 and only returning results that create addresses with at least four leading zeroes or six total zeroes, use `$ cargo run --release $FACTORY $CALLER $INIT_CODE_HASH 2 4 6` (you'll also probably want to try tweaking the `WORK_SIZE` parameter in `src/lib.rs`).
+### Options
 
-PRs welcome!
+- `--starts-with` hex: Prefix for the contract address.
+- `--deployer` address: Address of the contract deployer
+- `--caller` address: Address of the caller. Used for the first 20 bytes of the salt
+- `--init-code-hash` hash: Init code hash of the contract to be deployed, without 0x prefix
+- `--gpu` number: GPU device to use. Defaults to 0.
+- `--help`: Print help information
+
+### Output
+
+When a matching address is found, the tool will output:
+
+- The contract address (with checksum)
+- The creation code hash used
+- The salt value to use with CREATE2
+- Verification that the address matches using the same algorithm as Foundry
+
+You can then use this salt value in your contract deployment to get the desired address.

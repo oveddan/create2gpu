@@ -1,5 +1,5 @@
 [package]
-name = "create2crunch"
+name = "create2gpu"
 version = "0.2.0"
 authors = ["0age <0age@protonmail.com"]
 
@@ -16,3 +16,4 @@ rayon = "1.0"
 separator = "0.3.1"
 terminal_size = "0.1.8"
 tiny-keccak = "1.4.2"
+clap = { version = "4.4", features = ["derive"] }
