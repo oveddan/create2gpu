@@ -29,6 +29,7 @@ $ cargo run --release -- --starts-with dead --deployer 0x0000000000FFe8B47B3e213
 - `--caller` address: Address of the caller. Used for the first 20 bytes of the salt
 - `--init-code-hash` hash: Init code hash of the contract to be deployed, without 0x prefix
 - `--gpu` number: GPU device to use. Defaults to 0.
+- `--all-gpus`, `-a`: Use all available GPUs for faster searching
 - `--help`: Print help information
 
 ### Output

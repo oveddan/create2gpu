@@ -30,6 +30,10 @@ struct Args {
     /// GPU device to use (0 for default GPU)
     #[arg(long, short, value_name = "DEVICE", default_value = "0")]
     gpu: u32,
+    
+    /// Use all available GPUs
+    #[arg(long, short = 'a')]
+    all_gpus: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -41,8 +45,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let calling_address = parse_address(&args.caller)?;
     let init_code_hash = parse_hash(&args.init_code_hash)?;
 
-    // Create the configuration
-    let config = Config {
+    // Create the base configuration
+    let base_config = Config {
         factory_address,
         calling_address,
         init_code_hash,
@@ -50,16 +54,104 @@ fn main() -> Result<(), Box<dyn Error>> {
         leading_zeroes_threshold: 0,
         total_zeroes_threshold: 0,
         prefix: None,
-        starts_with: args.starts_with,
+        starts_with: args.starts_with.to_lowercase(),
+        case_sensitive: false,
     };
 
-    // Run the GPU search
-    println!("Using GPU device {}...", config.gpu_device);
-    if let Err(e) = gpu(config) {
-        eprintln!("GPU search failed: {}", e);
-        process::exit(1);
+    if args.all_gpus {
+        // Run on all available GPUs
+        run_on_all_gpus(base_config)?;
+    } else {
+        // Original single-GPU code
+        println!("Using GPU device {}...", base_config.gpu_device);
+        if let Err(e) = gpu(base_config) {
+            eprintln!("GPU search failed: {}", e);
+            process::exit(1);
+        }
     }
 
+    Ok(())
+}
+
+// Helper function to run the search on all available GPUs
+fn run_on_all_gpus(base_config: Config) -> Result<(), Box<dyn Error>> {
+    // Get all available platforms and devices
+    let platforms = ocl::Platform::list();
+    
+    if platforms.is_empty() {
+        return Err("No OpenCL platforms found".into());
+    }
+    
+    let mut gpu_configs = Vec::new();
+    let mut total_gpus = 0;
+    
+    // Collect all available GPUs across all platforms
+    for platform_id in 0..platforms.len() {
+        // Get the platform
+        let platform_id = platforms[platform_id];
+        
+        // Get devices for this platform
+        let devices = match ocl::Device::list(platform_id, None) {
+            Ok(devices) => devices,
+            Err(e) => {
+                println!("Warning: Failed to get devices for platform {}: {}", platform_id, e);
+                continue;
+            }
+        };
+        
+        for (device_id, device) in devices.iter().enumerate() {
+            // Check if this is a GPU device
+            let device_type = match device.info(ocl::enums::DeviceInfo::Type) {
+                Ok(t) => t,
+                Err(e) => {
+                    println!("Warning: Failed to get device type for device {}: {}", device_id, e);
+                    continue;
+                }
+            };
+            
+            // Alternative approach using string representation
+            if let ocl::enums::DeviceInfoResult::Type(device_type) = device_type {
+                // Convert to string and check if it contains "GPU"
+                let type_str = format!("{:?}", device_type);
+                if type_str.contains("GPU") {
+                    let mut config = base_config.clone();
+                    config.gpu_device = device_id as u32;
+                    gpu_configs.push((platform_id, device_id as u32, config));
+                    total_gpus += 1;
+                }
+            }
+        }
+    }
+    
+    if total_gpus == 0 {
+        return Err("No GPU devices found".into());
+    }
+    
+    println!("Found {} GPU devices across {} platforms", total_gpus, platforms.len());
+    
+    // Create a channel for the first GPU to signal when a solution is found
+    let (tx, rx) = std::sync::mpsc::channel();
+    
+    // Spawn threads for each GPU
+    let _handles: Vec<_> = gpu_configs.into_iter().map(|(platform_id, device_id, cfg)| {
+        let tx = tx.clone();
+        let gpu_device = cfg.gpu_device; // Clone the GPU device ID before moving cfg
+        std::thread::spawn(move || {
+            println!("Starting search on platform {:?} GPU {}", platform_id, device_id);
+            if let Err(e) = gpu(cfg) {
+                eprintln!("GPU {} search failed: {}", gpu_device, e);
+            }
+            // Signal that we're done (either success or failure)
+            let _ = tx.send(());
+        })
+    }).collect();
+    
+    // Wait for the first GPU to find a solution
+    let _ = rx.recv();
+    
+    // All threads will exit when the main thread exits
+    println!("Solution found! Exiting...");
+    
     Ok(())
 }
 

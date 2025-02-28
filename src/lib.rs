@@ -15,7 +15,7 @@ extern crate tiny_keccak;
 
 use hex::FromHex;
 
-// Export the GPU function
+// Export only the gpu function
 pub use gpu::gpu;
 
 // workset size (tweak this!)
@@ -40,6 +40,7 @@ pub struct Config {
     pub total_zeroes_threshold: u8,
     pub prefix: Option<String>,
     pub starts_with: String,  // New field for the prefix to search for
+    pub case_sensitive: bool, // New field for case-sensitive matching
 }
 
 /// Validate the provided arguments and construct the Config struct.
@@ -203,6 +204,7 @@ impl Config {
             total_zeroes_threshold,
             prefix,
             starts_with: String::new(),
+            case_sensitive: false,
           }
         )
     }
