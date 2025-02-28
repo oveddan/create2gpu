@@ -236,26 +236,51 @@ static inline char nibbleToHexChar(uchar nibble) {
   return nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
 }
 
-// Function to check if the address starts with a specific prefix
-static inline bool startsWithPrefix(uchar const *d, __constant uchar const *prefix, int prefixLen) {
-  // Each byte of d contains 2 hex characters
-  // We need to check if the hex representation of d starts with the prefix
+// Function to check if the address starts with a specific prefix and/or ends with a specific suffix
+static inline bool matchesAddressCriteria(uchar const *d, __constant uchar const *prefix, int prefixLen, 
+                                         __constant uchar const *suffix, int suffixLen) {
+  // Check prefix if specified
+  if (prefixLen > 0) {
+    for (int i = 0; i < prefixLen; i++) {
+      // Calculate which byte and nibble we need from d
+      int byteIndex = i / 2;
+      bool isHighNibble = (i % 2 == 0);
+      
+      // Extract the nibble from d
+      uchar byte = d[byteIndex];
+      uchar nibble = isHighNibble ? ((byte >> 4) & 0xF) : (byte & 0xF);
+      
+      // Convert nibble to hex character (always lowercase)
+      char hexChar = nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
+      
+      // Compare with the prefix character
+      if (hexChar != prefix[i]) {
+        return false;
+      }
+    }
+  }
   
-  for (int i = 0; i < prefixLen; i++) {
-    // Calculate which byte and nibble we need from d
-    int byteIndex = i / 2;
-    bool isHighNibble = (i % 2 == 0);
-    
-    // Extract the nibble from d
-    uchar byte = d[byteIndex];
-    uchar nibble = isHighNibble ? ((byte >> 4) & 0xF) : (byte & 0xF);
-    
-    // Convert nibble to hex character
-    char hexChar = nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
-    
-    // Compare with the prefix character
-    if (hexChar != prefix[i]) {
-      return false;
+  // Check suffix if specified
+  if (suffixLen > 0) {
+    for (int i = 0; i < suffixLen; i++) {
+      // Calculate which byte and nibble we need from d
+      // For suffix, we start from the end
+      int addressLen = 40; // Length of address in hex chars
+      int pos = addressLen - suffixLen + i;
+      int byteIndex = pos / 2;
+      bool isHighNibble = (pos % 2 == 0);
+      
+      // Extract the nibble from d
+      uchar byte = d[byteIndex];
+      uchar nibble = isHighNibble ? ((byte >> 4) & 0xF) : (byte & 0xF);
+      
+      // Convert nibble to hex character (always lowercase)
+      char hexChar = nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
+      
+      // Compare with the suffix character
+      if (hexChar != suffix[i]) {
+        return false;
+      }
     }
   }
   
@@ -313,9 +338,11 @@ __kernel void hashMessage(
     sponge[i + 53] = d_message[i + 20];
   }
 
-  // Get the prefix to check for and its length
+  // Get the prefix and suffix to check for and their lengths
   int prefixLen = d_message[52];
   __constant uchar const *prefix = &d_message[53];
+  int suffixLen = d_message[53 + prefixLen];
+  __constant uchar const *suffix = &d_message[54 + prefixLen];
 
   // begin padding based on message length (0xff + 20 bytes + 32 bytes + 32 bytes = 85 bytes)
   sponge[85] = 0x01;
@@ -331,8 +358,8 @@ __kernel void hashMessage(
   // Apply keccakf
   keccakf(spongeBuffer);
 
-  // Check if the address starts with the specified prefix
-  if (startsWithPrefix(digest, prefix, prefixLen)) {
+  // Check if the address matches the criteria
+  if (matchesAddressCriteria(digest, prefix, prefixLen, suffix, suffixLen)) {
     // Found a solution
     solutions[0] = nonce.uint64_t;
     has_solution[0] = 1;
