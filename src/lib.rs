@@ -39,8 +39,9 @@ pub struct Config {
     pub leading_zeroes_threshold: u8,
     pub total_zeroes_threshold: u8,
     pub prefix: Option<String>,
-    pub starts_with: String,  // New field for the prefix to search for
-    pub case_sensitive: bool, // New field for case-sensitive matching
+    pub starts_with: String,  // Field for the prefix to search for
+    pub ends_with: String,    // New field for the suffix to search for
+    pub case_sensitive: bool, // Field for case-sensitive matching
 }
 
 /// Validate the provided arguments and construct the Config struct.
@@ -204,6 +205,7 @@ impl Config {
             total_zeroes_threshold,
             prefix,
             starts_with: String::new(),
+            ends_with: String::new(),
             case_sensitive: false,
           }
         )

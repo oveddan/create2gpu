@@ -12,8 +12,12 @@ use create2gpu::{Config, gpu};
 #[command(name = "create2gpu", author, version, about, long_about = None)]
 struct Args {
     /// Prefix for the contract address (e.g., "dead", "cafe", etc.)
-    #[arg(long, short, value_name = "HEX")]
-    starts_with: String,
+    #[arg(long, short, value_name = "HEX", required_unless_present = "ends_with")]
+    starts_with: Option<String>,
+
+    /// Suffix for the contract address (e.g., "dead", "cafe", etc.)
+    #[arg(long, short, value_name = "HEX", required_unless_present = "starts_with")]
+    ends_with: Option<String>,
 
     /// Address of the contract deployer that will call CREATE2
     #[arg(long, value_name = "ADDRESS")]
@@ -54,7 +58,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         leading_zeroes_threshold: 0,
         total_zeroes_threshold: 0,
         prefix: None,
-        starts_with: args.starts_with.to_lowercase(),
+        starts_with: args.starts_with.unwrap_or_default().to_lowercase(),
+        ends_with: args.ends_with.unwrap_or_default().to_lowercase(),
         case_sensitive: false,
     };
 

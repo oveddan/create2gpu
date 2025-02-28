@@ -25,16 +25,20 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
     // Prefix unused variables with underscore
     let _salt: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
-    // Set up the message for the kernel (factory address + init code hash + prefix)
-    let mut message: Vec<u8> = Vec::with_capacity(53 + config.starts_with.len());
+    // Set up the message for the kernel (factory address + init code hash + prefix + suffix)
+    let mut message: Vec<u8> = Vec::with_capacity(53 + config.starts_with.len() + config.ends_with.len() + 1);
     // First 20 bytes: factory address
     message.extend_from_slice(&factory);
     // Next 32 bytes: init code hash
     message.extend_from_slice(&init_hash);
     // Next byte: length of the prefix
     message.push(config.starts_with.len() as u8);
-    // Last bytes: the prefix itself
+    // Next bytes: the prefix itself
     message.extend_from_slice(config.starts_with.as_bytes());
+    // Next byte: length of the suffix
+    message.push(config.ends_with.len() as u8);
+    // Last bytes: the suffix itself
+    message.extend_from_slice(config.ends_with.as_bytes());
 
     // Set up the OpenCL context
     let platform = Platform::default();
@@ -151,13 +155,35 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
             println!("Found potential solution!");
             println!("Address from kernel digest: 0x{}", hex_address);
             
-            // Check if the address starts with the specified prefix
-            if hex_address.starts_with(&config.starts_with) {
+            // Check if the address matches our criteria
+            let matches = if !config.starts_with.is_empty() && !config.ends_with.is_empty() {
+                // Check both prefix and suffix
+                hex_address.starts_with(&config.starts_with) && hex_address.ends_with(&config.ends_with)
+            } else if !config.starts_with.is_empty() {
+                // Check only prefix
+                hex_address.starts_with(&config.starts_with)
+            } else if !config.ends_with.is_empty() {
+                // Check only suffix
+                hex_address.ends_with(&config.ends_with)
+            } else {
+                // No criteria specified, always match
+                true
+            };
+            
+            if matches {
                 // Calculate the time it took to find the solution
                 let solution_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64() - start_time;
                 
                 // Found a valid solution
-                println!("\nFound valid solution with prefix '{}' in {:.2} seconds!", config.starts_with, solution_time);
+                let criteria = if !config.starts_with.is_empty() && !config.ends_with.is_empty() {
+                    format!("prefix '{}' and suffix '{}'", config.starts_with, config.ends_with)
+                } else if !config.starts_with.is_empty() {
+                    format!("prefix '{}'", config.starts_with)
+                } else {
+                    format!("suffix '{}'", config.ends_with)
+                };
+                
+                println!("\nFound valid solution with {} in {:.2} seconds!", criteria, solution_time);
                 
                 // Convert address to checksummed format
                 let checksummed_address = to_checksum_address(&hex_address);
