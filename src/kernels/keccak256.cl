@@ -287,6 +287,62 @@ static inline bool matchesAddressCriteria(uchar const *d, __constant uchar const
   return true;
 }
 
+// Function to count leading 1s in an address
+static inline int countLeadingOnes(uchar const *d) {
+  int count = 0;
+  
+  // Check each nibble from the start
+  for (int i = 0; i < 40; i++) { // 40 hex chars in an address
+    // Calculate which byte and nibble we need
+    int byteIndex = i / 2;
+    bool isHighNibble = (i % 2 == 0);
+    
+    // Extract the nibble
+    uchar byte = d[byteIndex];
+    uchar nibble = isHighNibble ? ((byte >> 4) & 0xF) : (byte & 0xF);
+    
+    // Convert nibble to hex character
+    char hexChar = nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
+    
+    // Check if it's a '1'
+    if (hexChar == '1') {
+      count++;
+    } else {
+      break; // Stop counting when we hit a non-1
+    }
+  }
+  
+  return count;
+}
+
+// Function to count trailing 1s in an address
+static inline int countTrailingOnes(uchar const *d) {
+  int count = 0;
+  
+  // Check each nibble from the end
+  for (int i = 39; i >= 0; i--) { // 40 hex chars in an address
+    // Calculate which byte and nibble we need
+    int byteIndex = i / 2;
+    bool isHighNibble = (i % 2 == 0);
+    
+    // Extract the nibble
+    uchar byte = d[byteIndex];
+    uchar nibble = isHighNibble ? ((byte >> 4) & 0xF) : (byte & 0xF);
+    
+    // Convert nibble to hex character
+    char hexChar = nibble < 10 ? '0' + nibble : 'a' + (nibble - 10);
+    
+    // Check if it's a '1'
+    if (hexChar == '1') {
+      count++;
+    } else {
+      break; // Stop counting when we hit a non-1
+    }
+  }
+  
+  return count;
+}
+
 __kernel void hashMessage(
   __constant uchar const *d_message,
   __constant uint const *d_nonce,
@@ -358,10 +414,22 @@ __kernel void hashMessage(
   // Apply keccakf
   keccakf(spongeBuffer);
 
-  // Check if the address matches the criteria
-  if (matchesAddressCriteria(digest, prefix, prefixLen, suffix, suffixLen)) {
+  // Get the minimum required leading and trailing 1s
+  int minLeadingOnes = d_message[52];
+  int minTrailingOnes = d_message[53];
+  int bestScore = d_message[54]; // Get the current best score
+
+  // Count leading and trailing 1s in the address
+  int leadingOnes = countLeadingOnes(digest);
+  int trailingOnes = countTrailingOnes(digest);
+  int totalOnes = leadingOnes + trailingOnes;
+
+  // Check if this address meets our criteria and is BETTER than the best score (not just equal)
+  if (leadingOnes >= minLeadingOnes && trailingOnes >= minTrailingOnes && totalOnes > bestScore) {
     // Found a solution
     solutions[0] = nonce.uint64_t;
+    solutions[1] = leadingOnes;
+    solutions[2] = trailingOnes;
     has_solution[0] = 1;
     
     // Copy the digest to the output buffer

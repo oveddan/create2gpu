@@ -4,6 +4,8 @@ extern crate clap;
 use std::process;
 use std::error::Error;
 use clap::Parser;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 use create2gpu::{Config, gpu};
 
@@ -12,11 +14,11 @@ use create2gpu::{Config, gpu};
 #[command(name = "create2gpu", author, version, about, long_about = None)]
 struct Args {
     /// Prefix for the contract address (e.g., "dead", "cafe", etc.)
-    #[arg(long, short, value_name = "HEX", required_unless_present = "ends_with")]
+    #[arg(long, short, value_name = "HEX")]
     starts_with: Option<String>,
 
     /// Suffix for the contract address (e.g., "dead", "cafe", etc.)
-    #[arg(long, short, value_name = "HEX", required_unless_present = "starts_with")]
+    #[arg(long, short, value_name = "HEX")]
     ends_with: Option<String>,
 
     /// Address of the contract deployer that will call CREATE2
@@ -38,6 +40,10 @@ struct Args {
     /// Use all available GPUs
     #[arg(long, short = 'a')]
     all_gpus: bool,
+
+    /// Output file for successful finds (CSV format)
+    #[arg(long, short, value_name = "FILE", default_value = "results.csv")]
+    output: String,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -49,6 +55,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let calling_address = parse_address(&args.caller)?;
     let init_code_hash = parse_hash(&args.init_code_hash)?;
 
+    // Read the best score from the CSV file if it exists
+    let _best_score = read_best_score_from_csv(&args.output);
+
     // Create the base configuration
     let base_config = Config {
         factory_address,
@@ -58,9 +67,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         leading_zeroes_threshold: 0,
         total_zeroes_threshold: 0,
         prefix: None,
-        starts_with: args.starts_with.unwrap_or_default().to_lowercase(),
-        ends_with: args.ends_with.unwrap_or_default().to_lowercase(),
+        starts_with: String::new(),
+        ends_with: String::new(),
         case_sensitive: false,
+        min_leading_ones: 4,
+        min_trailing_ones: 4,
+        output_file: args.output.clone(),
     };
 
     if args.all_gpus {
@@ -216,4 +228,32 @@ fn parse_hash(hash_str: &str) -> Result<[u8; 32], Box<dyn Error>> {
     let mut result = [0u8; 32];
     result.copy_from_slice(&bytes);
     Ok(result)
+}
+
+// Add this function to read the best score from the CSV file
+fn read_best_score_from_csv(file_path: &str) -> usize {
+    // Default to 8 (4 leading + 4 trailing) if file doesn't exist or can't be read
+    let mut best_score = 8;
+    
+    // Try to open the file
+    if let Ok(file) = File::open(file_path) {
+        let reader = BufReader::new(file);
+        
+        // Skip the header line
+        for line in reader.lines().skip(1) {
+            if let Ok(line) = line {
+                // Parse the line (format: address,salt,score,leading_ones,trailing_ones)
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 3 {
+                    if let Ok(score) = parts[2].parse::<usize>() {
+                        if score > best_score {
+                            best_score = score;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    best_score
 }

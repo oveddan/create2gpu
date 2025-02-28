@@ -1,11 +1,14 @@
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 use console::Term;
 use ocl::{ProQue, Buffer, MemFlags, Platform, Device, Context, Queue};
 use rand::{thread_rng, Rng};
 use separator::Separatable;
-use terminal_size::{Width, Height, terminal_size};
 use tiny_keccak::Keccak;
 
 use crate::{Config, WORK_SIZE, u64_to_le_fixed_8};
@@ -25,20 +28,21 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
     // Prefix unused variables with underscore
     let _salt: [u8; 6] = [0, 0, 0, 0, 0, 0];
 
-    // Set up the message for the kernel (factory address + init code hash + prefix + suffix)
-    let mut message: Vec<u8> = Vec::with_capacity(53 + config.starts_with.len() + config.ends_with.len() + 1);
+    // Read the current best score from the CSV file
+    let best_score = read_current_best_score(&config.output_file);
+
+    // Set up the message for the kernel
+    let mut message: Vec<u8> = Vec::with_capacity(55); // Increased capacity for best score
     // First 20 bytes: factory address
     message.extend_from_slice(&factory);
     // Next 32 bytes: init code hash
     message.extend_from_slice(&init_hash);
-    // Next byte: length of the prefix
-    message.push(config.starts_with.len() as u8);
-    // Next bytes: the prefix itself
-    message.extend_from_slice(config.starts_with.as_bytes());
-    // Next byte: length of the suffix
-    message.push(config.ends_with.len() as u8);
-    // Last bytes: the suffix itself
-    message.extend_from_slice(config.ends_with.as_bytes());
+    // Next byte: minimum leading 1s
+    message.push(config.min_leading_ones as u8);
+    // Next byte: minimum trailing 1s
+    message.push(config.min_trailing_ones as u8);
+    // Next byte: current best score (for filtering in the kernel)
+    message.push(best_score as u8);
 
     // Set up the OpenCL context
     let platform = Platform::default();
@@ -58,13 +62,23 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
 
     // Prefix unused variables with underscore
     let _term = Term::stdout();
-    let mut previous_time = 0.0;
+    let _previous_time = 0.0;
     let start_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
     let mut cumulative_nonce: u64 = 0;
     let mut rng = thread_rng();
 
+    let term = Term::stdout();
+    let mut last_update = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
+    let mut last_attempts = 0u64;
+
     // Main loop
     loop {
+        // Read the current best score from the CSV file
+        let best_score = read_current_best_score(&config.output_file);
+        
+        // Update the message with the current best score
+        message[54] = best_score as u8;
+        
         // Build the kernel and define the type of each buffer
         let kern = ocl_pq.kernel_builder("hashMessage")
             .arg_named("message", None::<&Buffer<u8>>)
@@ -97,7 +111,7 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
         let solutions_buffer = Buffer::builder()
             .queue(ocl_pq.queue().clone())
             .flags(MemFlags::new().read_write())
-            .len(1)
+            .len(3)
             .fill_val(0u64)
             .build()?;
 
@@ -130,7 +144,7 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
         }
 
         // Read the solutions buffer
-        let mut solutions = vec![0u64; 1];
+        let mut solutions = vec![0u64; 3];
         solutions_buffer.read(&mut solutions).enq()?;
 
         // Read the has_solution buffer
@@ -145,6 +159,8 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
         if has_solution[0] != 0 {
             // A solution was found, process it
             let solution_bytes = u64_to_le_fixed_8(&solutions[0]);
+            let leading_ones = solutions[1];
+            let trailing_ones = solutions[2];
             
             // Extract the address from the digest
             let mut address_bytes: [u8; 20] = Default::default();
@@ -154,43 +170,34 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
             // Print detailed information about the solution
             println!("Found potential solution!");
             println!("Address from kernel digest: 0x{}", hex_address);
+            println!("Leading 1s: {}, Trailing 1s: {}", leading_ones, trailing_ones);
+            println!("Current best score: {}", best_score);
             
-            // Check if the address matches our criteria
-            let matches = if !config.starts_with.is_empty() && !config.ends_with.is_empty() {
-                // Check both prefix and suffix
-                hex_address.starts_with(&config.starts_with) && hex_address.ends_with(&config.ends_with)
-            } else if !config.starts_with.is_empty() {
-                // Check only prefix
-                hex_address.starts_with(&config.starts_with)
-            } else if !config.ends_with.is_empty() {
-                // Check only suffix
-                hex_address.ends_with(&config.ends_with)
-            } else {
-                // No criteria specified, always match
-                true
-            };
+            // Check if this is better than our current best
+            let mut update_best = false;
             
-            if matches {
+            // Convert u64 to usize for comparison
+            let leading_ones_usize = leading_ones as usize;
+            let trailing_ones_usize = trailing_ones as usize;
+            
+            // Calculate a score based on total 1s only
+            let current_score = leading_ones_usize + trailing_ones_usize;
+            
+            if current_score > best_score {
+                // This is a better solution
+                update_best = true;
+            }
+            
+            if update_best {
                 // Calculate the time it took to find the solution
                 let solution_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64() - start_time;
                 
-                // Found a valid solution
-                let criteria = if !config.starts_with.is_empty() && !config.ends_with.is_empty() {
-                    format!("prefix '{}' and suffix '{}'", config.starts_with, config.ends_with)
-                } else if !config.starts_with.is_empty() {
-                    format!("prefix '{}'", config.starts_with)
-                } else {
-                    format!("suffix '{}'", config.ends_with)
-                };
-                
-                println!("\nFound valid solution with {} in {:.2} seconds!", criteria, solution_time);
+                // Found a better solution
+                println!("\nFound solution with {} total 1s ({} leading + {} trailing) in {:.2} seconds!", 
+                         current_score, leading_ones_usize, trailing_ones_usize, solution_time);
                 
                 // Convert address to checksummed format
-                let checksummed_address = to_checksum_address(&hex_address);
-                println!("Address: {}", checksummed_address);
-                
-                // Print the creation code hash
-                println!("Creation Code Hash: 0x{}", hex::encode(&init_hash));
+                let _checksummed_address = to_checksum_address(&hex_address);
                 
                 // Format the salt properly as bytes32
                 let mut full_salt = [0u8; 32]; // Initialize with all zeros
@@ -202,7 +209,6 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
                 
                 // Format as hex
                 let salt_hex = format!("0x{}", hex::encode(&full_salt));
-                println!("Salt: {}", salt_hex);
                 
                 // Verify the address using the same method as Foundry
                 let mut hasher = Keccak::new_keccak256();
@@ -222,49 +228,75 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
                 let computed_hex = hex::encode(&computed_address);
                 let computed_checksummed = to_checksum_address(&computed_hex);
                 
-                println!("Verified Address: {}", computed_checksummed);
+                // Write to CSV file
+                let file_exists = std::path::Path::new(&config.output_file).exists();
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .append(true)
+                    .open(&config.output_file)
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to open output file: {}", e);
+                        std::process::exit(1);
+                    });
                 
-                // Exit the program with success
-                std::process::exit(0);
+                // Write header if the file is new
+                if !file_exists {
+                    writeln!(file, "address,salt,score,leading_ones,trailing_ones")
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to write CSV header: {}", e);
+                        });
+                }
+                
+                // Write the data
+                writeln!(
+                    file,
+                    "{},{},{},{},{}",
+                    computed_checksummed,
+                    salt_hex,
+                    current_score,
+                    leading_ones_usize,
+                    trailing_ones_usize
+                )
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to write to CSV file: {}", e);
+                });
+                
+                println!("Result written to {}", config.output_file);
+                
+                // Continue searching for even better solutions
             }
         }
 
         // Update the cumulative nonce
         cumulative_nonce += WORK_SIZE as u64;
 
-        // Print status update
+        // Update the progress display every second
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
-        let elapsed = current_time - start_time;
-        if elapsed - previous_time >= 1.0 {
-            previous_time = elapsed;
-            let rate = cumulative_nonce as f64 / elapsed / 1_000_000.0;
+        if current_time - last_update >= 1.0 {
+            let elapsed = current_time - start_time;
+            let attempts_since_last = cumulative_nonce - last_attempts;
+            let rate = attempts_since_last as f64 / (current_time - last_update);
             
-            // Get terminal size
-            let size = terminal_size();
-            let _width = if let Some((Width(w), Height(_))) = size {
-                w as usize
-            } else {
-                80
-            };
-            
-            // Clear the terminal output
+            // Format the output
+            let _ = term.clear_line();
+            print!("\r----- New Update -----\n");
+            print!("total runtime: {:.2} seconds                    work size per cycle: {}\n", 
+                   elapsed, WORK_SIZE.separated_string());
+            print!("rate: {:.2} million attempts per second        total attempts: {}\n", 
+                   rate / 1_000_000.0, cumulative_nonce.separated_string());
+            print!("current search space: {:08x}xxxxxxxx          searching for prefix: {}\n", 
+                   nonce[0], config.starts_with);
+
+            // Read the current best score from the CSV file
+            let best_score = read_current_best_score(&config.output_file);
+            print!("best score so far: {} total 1s\n", best_score);
+
+            // Clear the terminal after printing the update
             print!("\x1B[2J\x1B[1;1H"); // ANSI escape code to clear screen and move cursor to top-left
-            
-            // Print the status
-            println!(
-                "----- New Update -----\n\
-                 total runtime: {:.2} seconds\t\t\twork size per cycle: {}\n\
-                 rate: {:.2} million attempts per second\ttotal attempts: {}\n\
-                 current search space: {:x}xxxxxxxx\t\tsearching for prefix: {}",
-                elapsed,
-                WORK_SIZE.separated_string(),
-                rate,
-                cumulative_nonce.separated_string(),
-                nonce[0],
-                config.starts_with
-            );
-            
-            
+
+            last_update = current_time;
+            last_attempts = cumulative_nonce;
         }
     }
 }
@@ -306,4 +338,32 @@ fn to_checksum_address(address: &str) -> String {
     }
     
     checksummed
+}
+
+// Add this function to read the best score from the CSV file
+fn read_current_best_score(file_path: &str) -> usize {
+    // Default to 8 (4 leading + 4 trailing) if file doesn't exist or can't be read
+    let mut best_score = 0;
+    
+    // Try to open the file
+    if let Ok(file) = File::open(file_path) {
+        let reader = BufReader::new(file);
+        
+        // Skip the header line
+        for line in reader.lines().skip(1) {
+            if let Ok(line) = line {
+                // Parse the line (format: address,salt,score,leading_ones,trailing_ones)
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 3 {
+                    if let Ok(score) = parts[2].parse::<usize>() {
+                        if score > best_score {
+                            best_score = score;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    best_score
 } 

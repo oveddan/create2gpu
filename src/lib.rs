@@ -42,6 +42,9 @@ pub struct Config {
     pub starts_with: String,  // Field for the prefix to search for
     pub ends_with: String,    // New field for the suffix to search for
     pub case_sensitive: bool, // Field for case-sensitive matching
+    pub min_leading_ones: usize,  // Minimum number of leading 1s required
+    pub min_trailing_ones: usize, // Minimum number of trailing 1s required
+    pub output_file: String,      // Path to the CSV output file
 }
 
 /// Validate the provided arguments and construct the Config struct.
@@ -207,6 +210,9 @@ impl Config {
             starts_with: String::new(),
             ends_with: String::new(),
             case_sensitive: false,
+            min_leading_ones: 0,
+            min_trailing_ones: 0,
+            output_file: String::new(),
           }
         )
     }
