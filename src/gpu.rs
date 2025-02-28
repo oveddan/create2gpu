@@ -73,8 +73,14 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
 
     // Main loop
     loop {
-        // Read the current best score from the CSV file
-        let best_score = read_current_best_score(&config.output_file);
+        // Get the current best score (from shared memory if available, otherwise from file)
+        let best_score = if let Some(shared_score) = &config.shared_best_score {
+            // Use the shared score in multi-GPU mode
+            *shared_score.lock().unwrap()
+        } else {
+            // Read from file in single-GPU mode
+            read_current_best_score(&config.output_file)
+        };
         
         // Update the message with the current best score
         message[54] = best_score as u8;
@@ -173,7 +179,7 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
             println!("Leading 1s: {}, Trailing 1s: {}", leading_ones, trailing_ones);
             println!("Current best score: {}", best_score);
             
-            // Check if this is better than our current best
+            // Check if this is better than or equal to our current best
             let mut update_best = false;
             
             // Convert u64 to usize for comparison
@@ -183,9 +189,26 @@ pub fn gpu(config: Config) -> Result<(), Box<dyn Error>> {
             // Calculate a score based on total 1s only
             let current_score = leading_ones_usize + trailing_ones_usize;
             
-            if current_score > best_score {
-                // This is a better solution
+            // Get the current best score (from shared memory if available, otherwise from file)
+            let best_score = if let Some(shared_score) = &config.shared_best_score {
+                // Use the shared score in multi-GPU mode
+                *shared_score.lock().unwrap()
+            } else {
+                // Read from file in single-GPU mode
+                read_current_best_score(&config.output_file)
+            };
+            
+            // Update if the current score is better than or equal to the best score
+            if current_score >= best_score {
+                // This is a better or equal solution
                 update_best = true;
+                
+                // Only update the shared best score if it's strictly better
+                if current_score > best_score && config.shared_best_score.is_some() {
+                    let shared_score = config.shared_best_score.as_ref().unwrap();
+                    let mut score = shared_score.lock().unwrap();
+                    *score = current_score;
+                }
             }
             
             if update_best {

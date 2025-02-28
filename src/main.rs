@@ -6,6 +6,7 @@ use std::error::Error;
 use clap::Parser;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::sync::{Arc, Mutex};
 
 use create2gpu::{Config, gpu};
 
@@ -73,6 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         min_leading_ones: 4,
         min_trailing_ones: 4,
         output_file: args.output.clone(),
+        shared_best_score: None,
     };
 
     if args.all_gpus {
@@ -91,13 +93,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 // Helper function to run the search on all available GPUs
-fn run_on_all_gpus(base_config: Config) -> Result<(), Box<dyn Error>> {
+fn run_on_all_gpus(mut base_config: Config) -> Result<(), Box<dyn Error>> {
     // Get all available platforms and devices
     let platforms = ocl::Platform::list();
     
     if platforms.is_empty() {
         return Err("No OpenCL platforms found".into());
     }
+    
+    // Read the initial best score from the CSV file
+    let initial_best_score = read_best_score_from_csv(&base_config.output_file);
+    
+    // Create a shared best score for all GPUs
+    let shared_best_score = Arc::new(Mutex::new(initial_best_score));
+    
+    // Set the shared best score in the base config
+    base_config.shared_best_score = Some(shared_best_score.clone());
     
     let mut gpu_configs = Vec::new();
     let mut total_gpus = 0;
