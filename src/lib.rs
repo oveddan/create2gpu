@@ -14,6 +14,7 @@ extern crate terminal_size;
 extern crate tiny_keccak;
 
 use hex::FromHex;
+use std::sync::{Arc, Mutex};
 
 // Export only the gpu function
 pub use gpu::gpu;
@@ -45,6 +46,7 @@ pub struct Config {
     pub min_leading_ones: usize,  // Minimum number of leading 1s required
     pub min_trailing_ones: usize, // Minimum number of trailing 1s required
     pub output_file: String,      // Path to the CSV output file
+    pub shared_best_score: Option<Arc<Mutex<usize>>>, // Shared best score for multi-GPU mode
 }
 
 /// Validate the provided arguments and construct the Config struct.
@@ -213,6 +215,7 @@ impl Config {
             min_leading_ones: 0,
             min_trailing_ones: 0,
             output_file: String::new(),
+            shared_best_score: None,
           }
         )
     }

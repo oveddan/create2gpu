@@ -424,8 +424,8 @@ __kernel void hashMessage(
   int trailingOnes = countTrailingOnes(digest);
   int totalOnes = leadingOnes + trailingOnes;
 
-  // Check if this address meets our criteria and is BETTER than the best score (not just equal)
-  if (leadingOnes >= minLeadingOnes && trailingOnes >= minTrailingOnes && totalOnes > bestScore) {
+  // Check if this address meets our criteria and is better than or equal to the best score
+  if (leadingOnes >= minLeadingOnes && trailingOnes >= minTrailingOnes && totalOnes >= bestScore) {
     // Found a solution
     solutions[0] = nonce.uint64_t;
     solutions[1] = leadingOnes;
